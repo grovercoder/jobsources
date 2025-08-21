@@ -1,24 +1,41 @@
-import tempfile
-import logging
+"""Module for managing job source analysis and data extraction."""
 
+import logging
+import os
+import json
+import hashlib
+from datetime import datetime, timedelta
+from urllib.parse import urljoin
+
+import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-import os
-import requests
 from selenium.common.exceptions import WebDriverException
 import google.generativeai as genai
 from dotenv import load_dotenv
-import json
-from urllib.parse import urljoin # Import urljoin
 from bs4 import BeautifulSoup
-import hashlib
-from datetime import datetime, timedelta
-import re
 import feedparser
 
 
+class NoOpLogger:
+    """A logger that does nothing."""
+    def debug(self, msg, *args, **kwargs):
+        """No-op debug method."""
+    def info(self, msg, *args, **kwargs):
+        """No-op info method."""
+    def warning(self, msg, *args, **kwargs):
+        """No-op warning method."""
+    def error(self, msg, *args, **kwargs):
+        """No-op error method."""
+    def critical(self, msg, *args, **kwargs):
+        """No-op critical method."""
+    def isEnabledFor(self, level): # pylint: disable=invalid-name, unused-argument
+        """No-op isEnabledFor method."""
+        return False
 
-class Manager:
+
+class Manager: # pylint: disable=too-many-instance-attributes
+    """Manages the analysis of job source URLs and extraction of job posting data."""
     def __init__(self, logger=None):
         self.logger = logger if logger is not None else logging.getLogger(__name__)
         load_dotenv() # Load environment variables from .env file
@@ -30,15 +47,19 @@ class Manager:
             gemini_api_key = os.getenv("GEMINI_API_KEY")
             if not gemini_api_key:
                 raise ValueError("GEMINI_API_KEY not found in .env file.")
-            
+
             gemini_model_name = os.getenv("GEMINI_MODEL", "gemini-pro")
             genai.configure(api_key=gemini_api_key)
             self.model = genai.GenerativeModel(gemini_model_name)
-            self.logger.info(f"Using Gemini LLM with model: {gemini_model_name}")
+            self.logger.info("Using Gemini LLM: %s", gemini_model_name)
         elif self.llm_provider == "ollama":
             self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
             self.ollama_model = os.getenv("OLLAMA_MODEL", "llama2")
-            self.logger.info(f"Using Ollama LLM at {self.ollama_url} with model: {self.ollama_model}")
+            self.logger.info(
+                "Using Ollama LLM: %s at %s",
+                self.ollama_model,
+                self.ollama_url
+            )
             # No direct model object for Ollama, will use requests directly
         else:
             raise ValueError(f"Unsupported LLM_PROVIDER: {self.llm_provider}. Must be 'gemini' or 'ollama'.")
@@ -50,7 +71,7 @@ class Manager:
         try:
             self.driver = webdriver.Chrome(options=chrome_options)
         except WebDriverException as e:
-            self.logger.error(f"Error initializing WebDriver: {e}")
+            self.logger.error("Error initializing WebDriver: %s", e)
             self.driver = None
 
         # Determine cache directory and create if it doesn't exist
@@ -65,7 +86,7 @@ class Manager:
         """
         Deletes files in the cache directory older than 12 hours.
         """
-        self.logger.info(f"Cleaning cache directory: {self.data_dir}")
+        self.logger.info("Cleaning cache directory: %s", self.data_dir)
         now = datetime.now()
         for filename in os.listdir(self.data_dir):
             file_path = os.path.join(self.data_dir, filename)
@@ -74,15 +95,16 @@ class Manager:
                 if now - file_mod_time > timedelta(hours=12):
                     try:
                         os.remove(file_path)
-                        self.logger.info(f"Removed old cache file: {filename}")
+                        self.logger.info("Removed old cache file: %s", filename)
                     except OSError as e:
-                        self.logger.error(f"Error removing file {filename}: {e}")
+                        self.logger.error("Error removing file %s: %s", filename, e)
 
     def __del__(self):
         # Ensure the browser is closed when the Manager object is destroyed
         if hasattr(self, 'driver') and self.driver:
             self.driver.quit()
 
+    # pylint: disable=no-else-return
     def _generate_content_with_llm(self, prompt: str) -> str:
         """
         Generates content using the configured LLM (Gemini or Ollama).
@@ -112,43 +134,48 @@ class Manager:
                 # "stop": ["```", "\n\n", "</xml>", "###", "END", "}"]
             }
             try:
-                response = requests.post(f"{self.ollama_url}/api/generate", headers=headers, json=data)
+                response = requests.post(
+                    f"{self.ollama_url}/api/generate",
+                    headers=headers,
+                    json=data,
+                    timeout=10
+                )
                 response.raise_for_status()
                 ollama_response_json = response.json()
                 return ollama_response_json.get("response", "") # Use .get for safety
             except requests.exceptions.RequestException as e:
-                self.logger.error(f"Error communicating with Ollama: {e}")
+                self.logger.error("Error communicating with Ollama: %s", e)
                 return ""
-        else:
+        else: # Changed from elif
             raise ValueError(f"Unsupported LLM_PROVIDER: {self.llm_provider}")
 
-    def _get_url_content(self, url: str) -> tuple[str, str]:
+    def _get_url_content(self, url: str) -> tuple[str, str]: # pylint: disable=too-many-branches, too-many-statements
         """
         Gets the content of a URL, either from cache or by downloading it.
         Returns a tuple of (file_path, map_type).
         """
-        self.logger.info(f"Getting content for URL: {url}")
-        
+        self.logger.info("Getting content for URL: %s", url)
+
         # Create a unique filename for the URL
         url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
         cached_file_base = os.path.join(self.data_dir, url_hash)
-        
+
         map_type = "html" # Default to HTML, will be refined
         file_path = ""
-        
+
         # Check for cached file with any known extension
         for ext in ["html", "json", "xml"]:
             potential_cached_file = f"{cached_file_base}.{ext}"
             if os.path.exists(potential_cached_file):
                 file_mod_time = datetime.fromtimestamp(os.path.getmtime(potential_cached_file))
                 if datetime.now() - file_mod_time < timedelta(hours=6):
-                    self.logger.info(f"Using cached file: {potential_cached_file}")
+                    self.logger.info("Using cached file: %s", potential_cached_file)
                     return potential_cached_file, ext # Return the actual extension as map_type
 
         # If not cached or too old, download
         try:
             # Infer type from URL extension or path segment (initial guess)
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
             content = response.text
 
@@ -169,7 +196,9 @@ class Manager:
                         self.driver.get(url)
                         content = self.driver.page_source
                     except WebDriverException as e:
-                        self.logger.warning(f"Warning: Selenium failed to get page source, falling back to requests content: {e}")
+                        self.logger.warning(
+                            "Selenium failed to get page source; falling back to requests content: %s", e
+                        )
                 else:
                     self.logger.info("WebDriver not initialized. Using requests content for HTML.")
 
@@ -184,37 +213,44 @@ class Manager:
                         BeautifulSoup(content, 'xml')
                         map_type = "rss"
                         file_path = f"{cached_file_base}.xml"
-                    except Exception:
+                    except (json.JSONDecodeError, Exception):
                         pass # Keep as HTML if neither JSON nor XML
 
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-            self.logger.info(f"Downloaded and cached content to: {file_path} with type: {map_type}")
+            self.logger.info("Downloaded and cached content to: %s with type: %s", file_path, map_type)
             return file_path, map_type
 
         except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error downloading URL with requests: {e}")
+            self.logger.error("Download error (requests): %s", e)
             return "", ""
         except WebDriverException as e:
-            self.logger.error(f"Error downloading URL with Selenium: {e}")
+            self.logger.error("Selenium download failed: %s", e)
             return "", ""
         except IOError as e:
-            self.logger.error(f"Error writing to file: {e}")
+            self.logger.error("Error writing to file: %s", e)
             return "", ""
         except Exception as e:
-            self.logger.error(f"An unexpected error occurred during download: {e}")
+            self.logger.error("An unexpected error occurred during download: %s", e)
             return "", ""
 
-            
 
+
+    # pylint: disable=too-many-branches, too-many-nested-blocks
     def _extract_postings(self, content: str, map_type: str, postings_url_selector: str, postings_title_selector: str) -> list:
         """
         Extracts job postings (URLs and titles) from listing content based on map_type and selectors.
         """
-        self.logger.debug(f"Inside _extract_postings - URL Selector: {postings_url_selector}, Title Selector: {postings_title_selector}")
+        self.logger.debug(
+            "Extracting postings (URL: %s, Title: %s)",
+            postings_url_selector,
+            postings_title_selector)
         postings = []
         if not postings_url_selector or not postings_title_selector:
-            self.logger.debug(f"Missing selectors for extracting postings. URL Selector: {postings_url_selector}, Title Selector: {postings_title_selector}")
+            self.logger.debug(
+                "Missing selectors (URL: %s, Title: %s)",
+                postings_url_selector,
+                postings_title_selector)
             return []
 
         if map_type == "html":
@@ -238,7 +274,7 @@ class Manager:
                 # This part needs careful consideration based on actual JSON structures.
                 # For demonstration, let's assume the LLM gives a path like 'jobs.url'
                 # and 'jobs.title' and we need to iterate over 'jobs'.
-                
+
                 # Simple example: if postings_url_selector is 'url' and content is a list of dicts
                 if isinstance(data, list):
                     for item in data:
@@ -249,14 +285,14 @@ class Manager:
                 elif isinstance(data, dict):
                     # Attempt to find a list within the dict
                     # This is highly dependent on the JSON structure
-                    for key, value in data.items():
+                    for _, value in data.items():
                         if isinstance(value, list):
                             for item in value:
                                 url = item.get(postings_url_selector)
                                 title = item.get(postings_title_selector)
                                 if url and title:
                                     postings.append({"url": url, "title": title})
-                                    
+
             except json.JSONDecodeError:
                 self.logger.error("Invalid JSON content.")
         elif map_type == "rss":
@@ -266,16 +302,16 @@ class Manager:
                 title = entry.title
                 if url and title:
                     postings.append({"url": url, "title": title})
-        self.logger.debug(f"Found {len(postings)} postings.")
+        self.logger.debug("Found %d postings.", len(postings))
         return postings
 
-    def _analyze_listing_with_gemini(self, content: str, content_type: str, mapping_object_template: dict) -> dict:
+    def _analyze_listing_with_gemini(self, content: str, content_type: str, mapping_object_template: dict) -> dict: # pylint: disable=too-many-locals
         """
         Analyzes the given listing content using Gemini LLM to extract mapping information.
         """
-        self.logger.info(f"Analyzing listing content with {self.llm_provider.capitalize()} LLM (type: {content_type})...")
+        self.logger.info("Analyzing listing content with %s LLM (type: %s)...", self.llm_provider.capitalize(), content_type)
         self.logger.info("")
-        
+
         base_prompt = """
         You are a parser. Output JSON only. No explanations.
         If you cannot find a value, return an empty string.
@@ -349,11 +385,11 @@ class Manager:
             debug_prompt_file_path = os.path.join(self.data_dir, "prompt_listing.md")
             with open(debug_prompt_file_path, 'w', encoding='utf-8') as f:
                 f.write(prompt)
-            self.logger.debug(f"Prompt written to: {debug_prompt_file_path}")
+            self.logger.debug("Prompt written to: %s", debug_prompt_file_path)
 
         try:
             raw_llm_response = self._generate_content_with_llm(prompt)
-            self.logger.debug(f"Raw LLM response: {raw_llm_response}")
+            self.logger.debug("Raw LLM response: %s", raw_llm_response)
 
             json_string = ""
             # Attempt to find the first and last curly braces to extract the JSON string
@@ -370,28 +406,31 @@ class Manager:
                     json_string = raw_llm_response.strip()
 
             extracted_data = json.loads(json_string)
-            
+
             # Update mapping_object_template with extracted data
-            mapping_object_template["source_name"] = extracted_data.get("source_name", "")
-            mapping_object_template["selectors"]["postings_url_selector"] = extracted_data.get("postings_url_selector", "")
-            mapping_object_template["selectors"]["postings_title_selector"] = extracted_data.get("postings_title_selector", "")
-            
+            mapping_object_template["source_name"] = \
+                extracted_data.get("source_name", "")
+            mapping_object_template["selectors"]["postings_url_selector"] = \
+                extracted_data.get("postings_url_selector", "")
+            mapping_object_template["selectors"]["postings_title_selector"] = \
+                extracted_data.get("postings_title_selector", "")
+
             return extracted_data
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Error decoding JSON from LLM response: {e}")
-            self.logger.error(f"Problematic JSON string: {json_string}")
+            self.logger.error("Error decoding JSON from LLM response: %s", e)
+            self.logger.error("Problematic JSON string: %s", json_string)
             return mapping_object_template
-        except Exception as e:
-            self.logger.error(f"Error analyzing content with Gemini LLM: {e}")
+        except Exception as e: # Catch any other unexpected errors # pylint: disable=broad-exception-caught
+            self.logger.error("Error analyzing content with Gemini LLM: %s", e)
             return mapping_object_template
 
     def _analyze_detail_with_gemini(self, content: str, content_type: str, mapping_object_template: dict) -> dict:
         """
         Analyzes the given detail content using Gemini LLM to extract mapping information.
         """
-        self.logger.info(f"Analyzing detail content with {self.llm_provider.capitalize()} LLM (type: {content_type})...")
-        
+        self.logger.info("Analyzing detail content with %s LLM (type: %s)...", self.llm_provider.capitalize(), content_type)
+
         base_prompt = """
         You are a parser. Output JSON only. No explanations.
         If you cannot find a value, return an empty string.
@@ -457,11 +496,11 @@ class Manager:
         if self.logger.isEnabledFor(logging.DEBUG):
             with open(debug_prompt_file_path, 'w', encoding='utf-8') as f:
                 f.write(prompt)
-            self.logger.debug(f"Prompt written to: {debug_prompt_file_path}")
+            self.logger.debug("Prompt written to: %s", debug_prompt_file_path)
 
         try:
             raw_llm_response = self._generate_content_with_llm(prompt)
-            self.logger.debug(f"Raw LLM response: {raw_llm_response}")
+            self.logger.debug("Raw LLM response: %s", raw_llm_response)
 
             json_string = ""
             # Attempt to find the first and last curly braces to extract the JSON string
@@ -478,19 +517,20 @@ class Manager:
                     json_string = raw_llm_response.strip()
 
             extracted_data = json.loads(json_string)
-            
+
             mapping_object_template["selectors"].update(extracted_data.get("selectors", {}))
-            
+
             return extracted_data
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Error decoding JSON from LLM response: {e}")
-            self.logger.error(f"Problematic JSON string: {json_string}")
+            self.logger.error("Error decoding JSON from LLM response: %s", e)
+            self.logger.error("Problematic JSON string: %s", json_string)
             return mapping_object_template
-        except Exception as e:
-            self.logger.error(f"Error analyzing content with Gemini LLM: {e}")
+        except Exception as e: # Catch any other unexpected errors # pylint: disable=broad-exception-caught
+            self.logger.error("Error analyzing content with Gemini LLM: %s", e)
             return mapping_object_template
 
+    # pylint: disable=no-else-return
     def _analyze_with_gemini(self, content: str, content_type: str, analysis_type: str, mapping_object_template: dict) -> dict:
         """
         Dispatches to the appropriate Gemini LLM analysis method based on analysis_type.
@@ -524,33 +564,33 @@ class Manager:
             if not listing_file_path:
                 self.logger.error("Failed to download listing URL.")
                 return mapping_object
-            
+
             with open(listing_file_path, 'r', encoding='utf-8') as f:
                 listing_content = f.read()
 
             # Analyze listing with Gemini to get source_name and posting selectors
             llm_listing_data = self._analyze_with_gemini(listing_content, map_type, "listing", mapping_object)
-            
+
             mapping_object["source_name"] = llm_listing_data.get("source_name", "")
             mapping_object["selectors"]["postings_url_selector"] = llm_listing_data.get("postings_url_selector", "")
             mapping_object["selectors"]["postings_title_selector"] = llm_listing_data.get("postings_title_selector", "")
 
             # Extract postings from the listing content
-            self.logger.debug(f"DEBUG: Selectors before _extract_postings: {mapping_object['selectors']}")
-            mapping_object["postings"] = self._extract_postings(listing_content, map_type, 
+            self.logger.debug("DEBUG: Selectors before _extract_postings: %s", mapping_object['selectors'])
+            mapping_object["postings"] = self._extract_postings(listing_content, map_type,
                                                                mapping_object["selectors"].get("postings_url_selector"),
                                                                mapping_object["selectors"].get("postings_title_selector"))
 
             # If postings are found, select a sample and analyze the detail page
             if mapping_object["postings"]:
                 sample_detail_url = urljoin(url, mapping_object["postings"][0]["url"]) # Take the first posting as sample and make it absolute
-                self.logger.info(f"Analyzing sample detail URL: {sample_detail_url}")
+                self.logger.info("Analyzing sample detail URL: %s", sample_detail_url)
 
                 detail_file_path, detail_map_type = self._get_url_content(sample_detail_url)
                 if not detail_file_path:
-                    self.logger.error(f"Failed to download sample detail URL: {sample_detail_url}")
+                    self.logger.error("Failed to download sample detail URL: %s", sample_detail_url)
                     return mapping_object
-                
+
                 with open(detail_file_path, 'r', encoding='utf-8') as f:
                     detail_content = f.read()
 
@@ -560,8 +600,12 @@ class Manager:
             else:
                 self.logger.info("No postings found to extract a sample detail URL.")
 
+        except requests.exceptions.RequestException as e:
+            self.logger.error("An error occurred during network request: %s", e)
+        except IOError as e:
+            self.logger.error("An error occurred during file operation: %s", e)
         except Exception as e:
-            self.logger.error(f"An error occurred during URL analysis: {e}")
+            self.logger.error("An unexpected error occurred during URL analysis: %s", e)
         finally:
             # No temporary files to clean up as _get_url_content handles caching
             pass
