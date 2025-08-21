@@ -1,7 +1,7 @@
 import sys
 import json
 import logging
-from src.analysis.manager import Manager
+from jobsources.analysis.manager import Manager
 import tempfile # Import tempfile
 
 # Configure logging
