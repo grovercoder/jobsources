@@ -19,29 +19,36 @@ import feedparser
 
 class NoOpLogger:
     """A logger that does nothing."""
+
     def debug(self, msg, *args, **kwargs):
         """No-op debug method."""
+
     def info(self, msg, *args, **kwargs):
         """No-op info method."""
+
     def warning(self, msg, *args, **kwargs):
         """No-op warning method."""
+
     def error(self, msg, *args, **kwargs):
         """No-op error method."""
+
     def critical(self, msg, *args, **kwargs):
         """No-op critical method."""
-    def isEnabledFor(self, level): # pylint: disable=invalid-name, unused-argument
+
+    def isEnabledFor(self, level):  # pylint: disable=invalid-name, unused-argument
         """No-op isEnabledFor method."""
         return False
 
 
-class Manager: # pylint: disable=too-many-instance-attributes
+class Manager:  # pylint: disable=too-many-instance-attributes
     """Manages the analysis of job source URLs and extraction of job posting data."""
+
     def __init__(self, logger=None):
         self.logger = logger if logger is not None else logging.getLogger(__name__)
-        load_dotenv() # Load environment variables from .env file
+        load_dotenv()  # Load environment variables from .env file
 
         self.llm_provider = os.getenv("LLM_PROVIDER", "gemini").lower()
-        self.model = None # Initialize model to None
+        self.model = None  # Initialize model to None
 
         if self.llm_provider == "gemini":
             gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -56,13 +63,13 @@ class Manager: # pylint: disable=too-many-instance-attributes
             self.ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
             self.ollama_model = os.getenv("OLLAMA_MODEL", "llama2")
             self.logger.info(
-                "Using Ollama LLM: %s at %s",
-                self.ollama_model,
-                self.ollama_url
+                "Using Ollama LLM: %s at %s", self.ollama_model, self.ollama_url
             )
             # No direct model object for Ollama, will use requests directly
         else:
-            raise ValueError(f"Unsupported LLM_PROVIDER: {self.llm_provider}. Must be 'gemini' or 'ollama'.")
+            raise ValueError(
+                f"Unsupported LLM_PROVIDER: {self.llm_provider}. Must be 'gemini' or 'ollama'."
+            )
 
         # Setup Chrome options for headless browsing
         chrome_options = Options()
@@ -83,7 +90,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
         self._clean_old_cache_files()
 
         # Configure request timeout
-        self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", 30))
+        self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", "30"))
 
     def _clean_old_cache_files(self):
         """
@@ -104,7 +111,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
 
     def __del__(self):
         # Ensure the browser is closed when the Manager object is destroyed
-        if hasattr(self, 'driver') and self.driver:
+        if hasattr(self, "driver") and self.driver:
             self.driver.quit()
 
     # pylint: disable=no-else-return
@@ -133,7 +140,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
                         "content": prompt,
                     },
                 ],
-                "stream": False, # We want the full response at once
+                "stream": False,  # We want the full response at once
                 # "stop": ["```", "\n\n", "</xml>", "###", "END", "}"]
             }
             try:
@@ -141,18 +148,20 @@ class Manager: # pylint: disable=too-many-instance-attributes
                     f"{self.ollama_url}/api/generate",
                     headers=headers,
                     json=data,
-                    timeout=self.request_timeout
+                    timeout=self.request_timeout,
                 )
                 response.raise_for_status()
                 ollama_response_json = response.json()
-                return ollama_response_json.get("response", "") # Use .get for safety
+                return ollama_response_json.get("response", "")  # Use .get for safety
             except requests_lib.exceptions.RequestException as e:
                 self.logger.error("Error communicating with Ollama: %s", e)
                 return ""
-        else: # Changed from elif
+        else:  # Changed from elif
             raise ValueError(f"Unsupported LLM_PROVIDER: {self.llm_provider}")
 
-    def _get_url_content(self, url: str) -> tuple[str, str]: # pylint: disable=too-many-branches, too-many-statements
+    def _get_url_content(
+        self, url: str
+    ) -> tuple[str, str]:  # pylint: disable=too-many-branches, too-many-statements, too-many-locals
         """
         Gets the content of a URL, either from cache or by downloading it.
         Returns a tuple of (file_path, map_type).
@@ -160,20 +169,25 @@ class Manager: # pylint: disable=too-many-instance-attributes
         self.logger.info("Getting content for URL: %s", url)
 
         # Create a unique filename for the URL
-        url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+        url_hash = hashlib.md5(url.encode("utf-8")).hexdigest()
         cached_file_base = os.path.join(self.data_dir, url_hash)
 
-        map_type = "html" # Default to HTML, will be refined
+        map_type = "html"  # Default to HTML, will be refined
         file_path = ""
 
         # Check for cached file with any known extension
         for ext in ["html", "json", "xml"]:
             potential_cached_file = f"{cached_file_base}.{ext}"
             if os.path.exists(potential_cached_file):
-                file_mod_time = datetime.fromtimestamp(os.path.getmtime(potential_cached_file))
+                file_mod_time = datetime.fromtimestamp(
+                    os.path.getmtime(potential_cached_file)
+                )
                 if datetime.now() - file_mod_time < timedelta(hours=6):
                     self.logger.info("Using cached file: %s", potential_cached_file)
-                    return potential_cached_file, ext # Return the actual extension as map_type
+                    return (
+                        potential_cached_file,
+                        ext,
+                    )  # Return the actual extension as map_type
 
         # If not cached or too old, download
         try:
@@ -183,10 +197,14 @@ class Manager: # pylint: disable=too-many-instance-attributes
             content = response.text
 
             # Determine map_type based on Content-Type header
-            content_type_header = response.headers.get('Content-Type', '').lower()
-            if 'application/json' in content_type_header:
+            content_type_header = response.headers.get("Content-Type", "").lower()
+            if "application/json" in content_type_header:
                 map_type = "json"
-            elif 'application/xml' in content_type_header or 'text/xml' in content_type_header or 'application/rss+xml' in content_type_header:
+            elif (
+                "application/xml" in content_type_header
+                or "text/xml" in content_type_header
+                or "application/rss+xml" in content_type_header
+            ):
                 map_type = "rss"
             else:
                 map_type = "html"
@@ -200,28 +218,35 @@ class Manager: # pylint: disable=too-many-instance-attributes
                         content = self.driver.page_source
                     except WebDriverException as e:
                         self.logger.warning(
-                            "Selenium failed to get page source; falling back to requests content: %s", e
+                            "Selenium failed to get page source; falling back to requests content: %s",
+                            e,
                         )
                 else:
-                    self.logger.info("WebDriver not initialized. Using requests content for HTML.")
+                    self.logger.info(
+                        "WebDriver not initialized. Using requests content for HTML."
+                    )
 
             # Fallback to content-based detection if MIME type is not specific or for initial requests content
-            if map_type == "html": # Only try to infer if it's still HTML
+            if map_type == "html":  # Only try to infer if it's still HTML
                 try:
                     json.loads(content)
                     map_type = "json"
                     file_path = f"{cached_file_base}.json"
                 except json.JSONDecodeError:
                     try:
-                        BeautifulSoup(content, 'xml')
+                        BeautifulSoup(content, "xml")
                         map_type = "rss"
                         file_path = f"{cached_file_base}.xml"
                     except (json.JSONDecodeError, Exception):
-                        pass # Keep as HTML if neither JSON nor XML
+                        pass  # Keep as HTML if neither JSON nor XML
 
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            self.logger.info("Downloaded and cached content to: %s with type: %s", file_path, map_type)
+            self.logger.info(
+                "Downloaded and cached content to: %s with type: %s",
+                file_path,
+                map_type,
+            )
             return file_path, map_type
 
         except requests_lib.exceptions.RequestException as e:
@@ -233,37 +258,43 @@ class Manager: # pylint: disable=too-many-instance-attributes
         except IOError as e:
             self.logger.error("Error writing to file: %s", e)
             return "", ""
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             self.logger.error("An unexpected error occurred during download: %s", e)
             return "", ""
 
-
-
     # pylint: disable=too-many-branches, too-many-nested-blocks
-    def _extract_postings(self, content: str, map_type: str, postings_url_selector: str, postings_title_selector: str) -> list:
+    def _extract_postings(
+        self,
+        content: str,
+        map_type: str,
+        postings_url_selector: str,
+        postings_title_selector: str,
+    ) -> list:
         """
         Extracts job postings (URLs and titles) from listing content based on map_type and selectors.
         """
         self.logger.debug(
             "Extracting postings (URL: %s, Title: %s)",
             postings_url_selector,
-            postings_title_selector)
+            postings_title_selector,
+        )
         postings = []
         if not postings_url_selector or not postings_title_selector:
             self.logger.debug(
                 "Missing selectors (URL: %s, Title: %s)",
                 postings_url_selector,
-                postings_title_selector)
+                postings_title_selector,
+            )
             return []
 
         if map_type == "html":
-            soup = BeautifulSoup(content, 'html.parser')
+            soup = BeautifulSoup(content, "html.parser")
             url_elements = soup.select(postings_url_selector)
             title_elements = soup.select(postings_title_selector)
 
             # Assuming a 1:1 correspondence and same order for simplicity
             for i in range(min(len(url_elements), len(title_elements))):
-                url = url_elements[i].get('href')
+                url = url_elements[i].get("href")
                 title = title_elements[i].get_text(strip=True)
                 if url and title:
                     postings.append({"url": url, "title": title})
@@ -308,11 +339,17 @@ class Manager: # pylint: disable=too-many-instance-attributes
         self.logger.debug("Found %d postings.", len(postings))
         return postings
 
-    def _analyze_listing_with_gemini(self, content: str, content_type: str, mapping_object_template: dict) -> dict: # pylint: disable=too-many-locals
+    def _analyze_listing_with_gemini(
+        self, content: str, content_type: str, mapping_object_template: dict
+    ) -> dict:  # pylint: disable=too-many-locals, too-many-branches, too-many-statements, broad-exception-caught
         """
         Analyzes the given listing content using Gemini LLM to extract mapping information.
         """
-        self.logger.info("Analyzing listing content with %s LLM (type: %s)...", self.llm_provider.capitalize(), content_type)
+        self.logger.info(
+            "Analyzing listing content with %s LLM (type: %s)...",
+            self.llm_provider.capitalize(),
+            content_type,
+        )
         self.logger.info("")
 
         base_prompt = """
@@ -386,7 +423,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
         # For debugging: Write the prompt to a file
         if self.logger.isEnabledFor(logging.DEBUG):
             debug_prompt_file_path = os.path.join(self.data_dir, "prompt_listing.md")
-            with open(debug_prompt_file_path, 'w', encoding='utf-8') as f:
+            with open(debug_prompt_file_path, "w", encoding="utf-8") as f:
                 f.write(prompt)
             self.logger.debug("Prompt written to: %s", debug_prompt_file_path)
 
@@ -396,27 +433,32 @@ class Manager: # pylint: disable=too-many-instance-attributes
 
             json_string = ""
             # Attempt to find the first and last curly braces to extract the JSON string
-            start_index = raw_llm_response.find('{')
-            end_index = raw_llm_response.rfind('}')
+            start_index = raw_llm_response.find("{")
+            end_index = raw_llm_response.rfind("}")
 
             if start_index != -1 and end_index != -1 and end_index > start_index:
                 json_string = raw_llm_response[start_index : end_index + 1]
             else:
                 # Fallback to stripping markdown if braces not found or invalid range
-                if raw_llm_response.startswith("```json") and raw_llm_response.endswith("```"):
-                    json_string = raw_llm_response[len("```json"):-len("```")].strip()
+                if raw_llm_response.startswith("```json") and raw_llm_response.endswith(
+                    "```"
+                ):
+                    json_string = raw_llm_response[len("```json") : -len("```")].strip()
                 else:
                     json_string = raw_llm_response.strip()
 
             extracted_data = json.loads(json_string)
 
             # Update mapping_object_template with extracted data
-            mapping_object_template["source_name"] = \
-                extracted_data.get("source_name", "")
-            mapping_object_template["selectors"]["postings_url_selector"] = \
+            mapping_object_template["source_name"] = extracted_data.get(
+                "source_name", ""
+            )
+            mapping_object_template["selectors"]["postings_url_selector"] = (
                 extracted_data.get("postings_url_selector", "")
-            mapping_object_template["selectors"]["postings_title_selector"] = \
+            )
+            mapping_object_template["selectors"]["postings_title_selector"] = (
                 extracted_data.get("postings_title_selector", "")
+            )
 
             return extracted_data
 
@@ -424,15 +466,21 @@ class Manager: # pylint: disable=too-many-instance-attributes
             self.logger.error("Error decoding JSON from LLM response: %s", e)
             self.logger.error("Problematic JSON string: %s", json_string)
             return mapping_object_template
-        except Exception as e: # Catch any other unexpected errors # pylint: disable=broad-exception-caught
+        except Exception as e:  # Catch any unexpected errors during LLM analysis # pylint: disable=broad-exception-caught
             self.logger.error("Error analyzing content with Gemini LLM: %s", e)
             return mapping_object_template
 
-    def _analyze_detail_with_gemini(self, content: str, content_type: str, mapping_object_template: dict) -> dict:
+    def _analyze_detail_with_gemini(
+        self, content: str, content_type: str, mapping_object_template: dict
+    ) -> dict:
         """
         Analyzes the given detail content using Gemini LLM to extract mapping information.
         """
-        self.logger.info("Analyzing detail content with %s LLM (type: %s)...", self.llm_provider.capitalize(), content_type)
+        self.logger.info(
+            "Analyzing detail content with %s LLM (type: %s)...",
+            self.llm_provider.capitalize(),
+            content_type,
+        )
 
         base_prompt = """
         You are a parser. Output JSON only. No explanations.
@@ -490,14 +538,16 @@ class Manager: # pylint: disable=too-many-instance-attributes
             ```
             """
         else:
-            raise ValueError(f"Unsupported content type for detail analysis: {content_type}")
+            raise ValueError(
+                f"Unsupported content type for detail analysis: {content_type}"
+            )
 
         prompt = base_prompt + specific_prompt
 
         # For debugging: Write the prompt to a file
         debug_prompt_file_path = os.path.join(self.data_dir, "prompt_detail.md")
         if self.logger.isEnabledFor(logging.DEBUG):
-            with open(debug_prompt_file_path, 'w', encoding='utf-8') as f:
+            with open(debug_prompt_file_path, "w", encoding="utf-8") as f:
                 f.write(prompt)
             self.logger.debug("Prompt written to: %s", debug_prompt_file_path)
 
@@ -507,21 +557,25 @@ class Manager: # pylint: disable=too-many-instance-attributes
 
             json_string = ""
             # Attempt to find the first and last curly braces to extract the JSON string
-            start_index = raw_llm_response.find('{')
-            end_index = raw_llm_response.rfind('}')
+            start_index = raw_llm_response.find("{")
+            end_index = raw_llm_response.rfind("}")
 
             if start_index != -1 and end_index != -1 and end_index > start_index:
                 json_string = raw_llm_response[start_index : end_index + 1]
             else:
                 # Fallback to stripping markdown if braces not found or invalid range
-                if raw_llm_response.startswith("```json") and raw_llm_response.endswith("```"):
-                    json_string = raw_llm_response[len("```json"):-len("```")].strip()
+                if raw_llm_response.startswith("```json") and raw_llm_response.endswith(
+                    "```"
+                ):
+                    json_string = raw_llm_response[len("```json") : -len("```")].strip()
                 else:
                     json_string = raw_llm_response.strip()
 
             extracted_data = json.loads(json_string)
 
-            mapping_object_template["selectors"].update(extracted_data.get("selectors", {}))
+            mapping_object_template["selectors"].update(
+                extracted_data.get("selectors", {})
+            )
 
             return extracted_data
 
@@ -529,19 +583,29 @@ class Manager: # pylint: disable=too-many-instance-attributes
             self.logger.error("Error decoding JSON from LLM response: %s", e)
             self.logger.error("Problematic JSON string: %s", json_string)
             return mapping_object_template
-        except Exception as e: # Catch any other unexpected errors # pylint: disable=broad-exception-caught
+        except Exception as e:  # Catch any unexpected errors during LLM analysis # pylint: disable=broad-exception-caught
             self.logger.error("Error analyzing content with Gemini LLM: %s", e)
             return mapping_object_template
 
     # pylint: disable=no-else-return
-    def _analyze_with_gemini(self, content: str, content_type: str, analysis_type: str, mapping_object_template: dict) -> dict:
+    def _analyze_with_gemini(
+        self,
+        content: str,
+        content_type: str,
+        analysis_type: str,
+        mapping_object_template: dict,
+    ) -> dict:
         """
         Dispatches to the appropriate Gemini LLM analysis method based on analysis_type.
         """
         if analysis_type == "listing":
-            return self._analyze_listing_with_gemini(content, content_type, mapping_object_template)
+            return self._analyze_listing_with_gemini(
+                content, content_type, mapping_object_template
+            )
         elif analysis_type == "detail":
-            return self._analyze_detail_with_gemini(content, content_type, mapping_object_template)
+            return self._analyze_detail_with_gemini(
+                content, content_type, mapping_object_template
+            )
         else:
             raise ValueError(f"Unknown analysis_type: {analysis_type}")
 
@@ -557,9 +621,9 @@ class Manager: # pylint: disable=too-many-instance-attributes
                 "company_url": "",
                 "posted_date": "",
                 "postings_url_selector": "",
-                "postings_title_selector": ""
+                "postings_title_selector": "",
             },
-            "postings": []
+            "postings": [],
         }
 
         try:
@@ -568,37 +632,57 @@ class Manager: # pylint: disable=too-many-instance-attributes
                 self.logger.error("Failed to download listing URL.")
                 return mapping_object
 
-            with open(listing_file_path, 'r', encoding='utf-8') as f:
+            with open(listing_file_path, "r", encoding="utf-8") as f:
                 listing_content = f.read()
 
             # Analyze listing with Gemini to get source_name and posting selectors
-            llm_listing_data = self._analyze_with_gemini(listing_content, map_type, "listing", mapping_object)
+            llm_listing_data = self._analyze_with_gemini(
+                listing_content, map_type, "listing", mapping_object
+            )
 
             mapping_object["source_name"] = llm_listing_data.get("source_name", "")
-            mapping_object["selectors"]["postings_url_selector"] = llm_listing_data.get("postings_url_selector", "")
-            mapping_object["selectors"]["postings_title_selector"] = llm_listing_data.get("postings_title_selector", "")
+            mapping_object["selectors"]["postings_url_selector"] = llm_listing_data.get(
+                "postings_url_selector", ""
+            )
+            mapping_object["selectors"]["postings_title_selector"] = (
+                llm_listing_data.get("postings_title_selector", "")
+            )
 
             # Extract postings from the listing content
-            self.logger.debug("DEBUG: Selectors before _extract_postings: %s", mapping_object['selectors'])
-            mapping_object["postings"] = self._extract_postings(listing_content, map_type,
-                                                               mapping_object["selectors"].get("postings_url_selector"),
-                                                               mapping_object["selectors"].get("postings_title_selector"))
+            self.logger.debug(
+                "DEBUG: Selectors before _extract_postings: %s",
+                mapping_object["selectors"],
+            )
+            mapping_object["postings"] = self._extract_postings(
+                listing_content,
+                map_type,
+                mapping_object["selectors"].get("postings_url_selector"),
+                mapping_object["selectors"].get("postings_title_selector"),
+            )
 
             # If postings are found, select a sample and analyze the detail page
             if mapping_object["postings"]:
-                sample_detail_url = urljoin(url, mapping_object["postings"][0]["url"]) # Take the first posting as sample and make it absolute
+                sample_detail_url = urljoin(
+                    url, mapping_object["postings"][0]["url"]
+                )  # Take the first posting as sample and make it absolute
                 self.logger.info("Analyzing sample detail URL: %s", sample_detail_url)
 
-                detail_file_path, detail_map_type = self._get_url_content(sample_detail_url)
+                detail_file_path, detail_map_type = self._get_url_content(
+                    sample_detail_url
+                )
                 if not detail_file_path:
-                    self.logger.error("Failed to download sample detail URL: %s", sample_detail_url)
+                    self.logger.error(
+                        "Failed to download sample detail URL: %s", sample_detail_url
+                    )
                     return mapping_object
 
-                with open(detail_file_path, 'r', encoding='utf-8') as f:
+                with open(detail_file_path, "r", encoding="utf-8") as f:
                     detail_content = f.read()
 
                 # Analyze detail page with Gemini to get detail selectors
-                llm_detail_data = self._analyze_with_gemini(detail_content, detail_map_type, "detail", mapping_object)
+                llm_detail_data = self._analyze_with_gemini(
+                    detail_content, detail_map_type, "detail", mapping_object
+                )
                 mapping_object["selectors"].update(llm_detail_data.get("selectors", {}))
             else:
                 self.logger.info("No postings found to extract a sample detail URL.")
@@ -607,7 +691,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
             self.logger.error("An error occurred during network request: %s", e)
         except IOError as e:
             self.logger.error("An error occurred during file operation: %s", e)
-        except Exception as e:
+        except Exception as e:  # Catch any other unexpected errors during URL analysis # pylint: disable=broad-exception-caught
             self.logger.error("An unexpected error occurred during URL analysis: %s", e)
         finally:
             # No temporary files to clean up as _get_url_content handles caching

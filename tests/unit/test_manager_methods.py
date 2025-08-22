@@ -18,7 +18,7 @@ def manager_instance(tmp_path, monkeypatch):
     monkeypatch.setenv("CACHE_DIR", str(cache_dir))
 
     # Mock os.getcwd() to point to tmp_path
-    monkeypatch.setattr(os, 'getcwd', lambda: str(tmp_path))
+    monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
 
     # Import Manager and NoOpLogger after patching
     from src.jobsources.analysis.manager import Manager, NoOpLogger
@@ -27,11 +27,15 @@ def manager_instance(tmp_path, monkeypatch):
     # Mock the WebDriver to raise an exception on .get()
     mock_driver = MagicMock()
     mock_driver.get.side_effect = WebDriverException("Mock WebDriver Exception")
-    monkeypatch.setattr('src.jobsources.analysis.manager.webdriver.Chrome', MagicMock(return_value=mock_driver))
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.webdriver.Chrome",
+        MagicMock(return_value=mock_driver),
+    )
 
     # Instantiate Manager with a NoOpLogger
     manager = Manager(logger=NoOpLogger())
     yield manager
+
 
 def test_clean_old_cache_files(manager_instance, tmp_path):
     cache_dir = tmp_path / "data" / "cache"
@@ -58,9 +62,9 @@ def test_clean_old_cache_files(manager_instance, tmp_path):
     manager_instance._clean_old_cache_files()
 
     # Assertions
-    assert not old_file.exists() # Old file should be deleted
-    assert medium_old_file.exists() # Medium old file should remain
-    assert new_file.exists() # New file should remain
+    assert not old_file.exists()  # Old file should be deleted
+    assert medium_old_file.exists()  # Medium old file should remain
+    assert new_file.exists()  # New file should remain
 
 
 def test_extract_postings_html(manager_instance):
@@ -82,8 +86,11 @@ def test_extract_postings_html(manager_instance):
         {"url": "/jobs/1", "title": "Job Title 1"},
         {"url": "/jobs/2", "title": "Job Title 2"},
     ]
-    extracted = manager_instance._extract_postings(html_content, "html", postings_url_selector, postings_title_selector)
+    extracted = manager_instance._extract_postings(
+        html_content, "html", postings_url_selector, postings_title_selector
+    )
     assert extracted == expected_postings
+
 
 def test_extract_postings_json(manager_instance):
     json_content = """
@@ -105,10 +112,15 @@ def test_extract_postings_json(manager_instance):
         {"url": "/api/jobs/1", "title": "JSON Job 1"},
         {"url": "/api/jobs/2", "title": "JSON Job 2"},
     ]
-    extracted = manager_instance._extract_postings(json_content, "json", postings_url_selector, postings_title_selector)
+    extracted = manager_instance._extract_postings(
+        json_content, "json", postings_url_selector, postings_title_selector
+    )
     assert extracted == expected_postings
 
-@pytest.mark.skip(reason="feedparser.parse not working as expected with string input in test environment")
+
+@pytest.mark.skip(
+    reason="feedparser.parse not working as expected with string input in test environment"
+)
 def test_extract_postings_rss(manager_instance):
     rss_content = """
     <?xml version="1.0" encoding="UTF-8"?>
@@ -129,12 +141,15 @@ def test_extract_postings_rss(manager_instance):
     """
     # RSS uses feedparser, so selectors are not directly passed to it.
     # The method extracts link and title from feed.entries.
-    extracted = manager_instance._extract_postings(rss_content, "rss", "", "") # Selectors are ignored for RSS
+    extracted = manager_instance._extract_postings(
+        rss_content, "rss", "", ""
+    )  # Selectors are ignored for RSS
     expected_postings = [
         {"url": "http://example.com/rss/1", "title": "RSS Job 1"},
         {"url": "http://example.com/rss/2", "title": "RSS Job 2"},
     ]
     assert extracted == expected_postings
+
 
 def test_extract_postings_empty_selectors(manager_instance):
     html_content = """
@@ -143,16 +158,22 @@ def test_extract_postings_empty_selectors(manager_instance):
     extracted = manager_instance._extract_postings(html_content, "html", "", "")
     assert extracted == []
 
+
 def test_extract_postings_no_matches(manager_instance):
     html_content = """
     <html><body><div class="no-match">Content</div></body></html>
     """
-    extracted = manager_instance._extract_postings(html_content, "html", ".non-existent-link", ".non-existent-title")
+    extracted = manager_instance._extract_postings(
+        html_content, "html", ".non-existent-link", ".non-existent-title"
+    )
     assert extracted == []
+
 
 def test_get_url_content_from_cache_recent(manager_instance, tmp_path, monkeypatch):
     url = "http://example.com/test_recent_cache"
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest() # Dynamically generated hash
+    url_hash = hashlib.md5(
+        url.encode("utf-8")
+    ).hexdigest()  # Dynamically generated hash
     cached_file_path = tmp_path / "data" / "cache" / f"{url_hash}.html"
     cached_file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -161,7 +182,9 @@ def test_get_url_content_from_cache_recent(manager_instance, tmp_path, monkeypat
 
     # Mock requests.get to ensure it's not called
     mock_requests_get = MagicMock()
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
@@ -169,45 +192,59 @@ def test_get_url_content_from_cache_recent(manager_instance, tmp_path, monkeypat
     assert map_type == "html"
     mock_requests_get.assert_not_called()
 
+
 def test_get_url_content_download_if_cache_old(manager_instance, tmp_path, monkeypatch):
     url = "http://example.com/test_old_cache"
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest() # Dynamically generated hash
+    url_hash = hashlib.md5(
+        url.encode("utf-8")
+    ).hexdigest()  # Dynamically generated hash
     cached_file_path = tmp_path / "data" / "cache" / f"{url_hash}.html"
     cached_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Create a cached file that is older than 6 hours
     with freeze_time(datetime.now() - timedelta(hours=7)):
         cached_file_path.write_text("old cached content")
-        os.utime(cached_file_path, (datetime.now().timestamp(), datetime.now().timestamp()))
+        os.utime(
+            cached_file_path, (datetime.now().timestamp(), datetime.now().timestamp())
+        )
 
     # Mock requests.get to return new content
     mock_response = MagicMock()
     mock_response.text = "new downloaded content"
-    mock_response.headers = {'Content-Type': 'text/html'}
+    mock_response.headers = {"Content-Type": "text/html"}
     mock_response.raise_for_status = MagicMock()
     mock_requests_get = MagicMock(return_value=mock_response)
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
-    assert file_path == str(cached_file_path.with_suffix('.html')) # Should be re-downloaded and saved as .html
+    assert file_path == str(
+        cached_file_path.with_suffix(".html")
+    )  # Should be re-downloaded and saved as .html
     assert map_type == "html"
     mock_requests_get.assert_called_once_with(url, timeout=10)
     assert cached_file_path.read_text() == "new downloaded content"
 
+
 def test_get_url_content_download_if_no_cache(manager_instance, tmp_path, monkeypatch):
     url = "http://example.com/test_no_cache"
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest() # Dynamically generated hash
+    url_hash = hashlib.md5(
+        url.encode("utf-8")
+    ).hexdigest()  # Dynamically generated hash
     expected_file_path = tmp_path / "data" / "cache" / f"{url_hash}.html"
     expected_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Mock requests.get to return new content
     mock_response = MagicMock()
     mock_response.text = "downloaded content"
-    mock_response.headers = {'Content-Type': 'text/html'}
+    mock_response.headers = {"Content-Type": "text/html"}
     mock_response.raise_for_status = MagicMock()
     mock_requests_get = MagicMock(return_value=mock_response)
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
@@ -216,45 +253,58 @@ def test_get_url_content_download_if_no_cache(manager_instance, tmp_path, monkey
     mock_requests_get.assert_called_once_with(url, timeout=10)
     assert expected_file_path.read_text() == "downloaded content"
 
+
 def test_get_url_content_html_type_detection(manager_instance, tmp_path, monkeypatch):
     url = "http://example.com/test_html"
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest() # Dynamically generated hash
+    url_hash = hashlib.md5(
+        url.encode("utf-8")
+    ).hexdigest()  # Dynamically generated hash
     expected_file_path = tmp_path / "data" / "cache" / f"{url_hash}.html"
     expected_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     mock_response = MagicMock()
     mock_response.text = "<html><body><h1>Hello</h1></body></html>"
-    mock_response.headers = {'Content-Type': 'text/html'}
+    mock_response.headers = {"Content-Type": "text/html"}
     mock_response.raise_for_status = MagicMock()
     mock_requests_get = MagicMock(return_value=mock_response)
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
     assert map_type == "html"
     assert file_path == str(expected_file_path)
 
+
 def test_get_url_content_json_type_detection(manager_instance, tmp_path, monkeypatch):
     url = "http://example.com/test_json"
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest() # Dynamically generated hash
+    url_hash = hashlib.md5(
+        url.encode("utf-8")
+    ).hexdigest()  # Dynamically generated hash
     expected_file_path = tmp_path / "data" / "cache" / f"{url_hash}.json"
     expected_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     mock_response = MagicMock()
     mock_response.text = '{"key": "value"}'
-    mock_response.headers = {'Content-Type': 'application/json'}
+    mock_response.headers = {"Content-Type": "application/json"}
     mock_response.raise_for_status = MagicMock()
     mock_requests_get = MagicMock(return_value=mock_response)
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
     assert map_type == "json"
     assert file_path == str(expected_file_path)
 
+
 def test_get_url_content_rss_type_detection(manager_instance, tmp_path, monkeypatch):
     url = "http://example.com/test_rss"
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest() # Dynamically generated hash
+    url_hash = hashlib.md5(
+        url.encode("utf-8")
+    ).hexdigest()  # Dynamically generated hash
     expected_file_path = tmp_path / "data" / "cache" / f"{url_hash}.rss"
     expected_file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -270,21 +320,28 @@ def test_get_url_content_rss_type_detection(manager_instance, tmp_path, monkeypa
       </channel>
     </rss>
     """
-    mock_response.headers = {'Content-Type': 'application/rss+xml'}
+    mock_response.headers = {"Content-Type": "application/rss+xml"}
     mock_response.raise_for_status = MagicMock()
     mock_requests_get = MagicMock(return_value=mock_response)
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
     assert map_type == "rss"
     assert file_path == str(expected_file_path)
 
+
 def test_get_url_content_download_failure(manager_instance, monkeypatch):
     url = "http://example.com/test_failure"
 
-    mock_requests_get = MagicMock(side_effect=requests.exceptions.RequestException("Download failed"))
-    monkeypatch.setattr('src.jobsources.analysis.manager.requests_lib.get', mock_requests_get)
+    mock_requests_get = MagicMock(
+        side_effect=requests.exceptions.RequestException("Download failed")
+    )
+    monkeypatch.setattr(
+        "src.jobsources.analysis.manager.requests_lib.get", mock_requests_get
+    )
 
     file_path, map_type = manager_instance._get_url_content(url)
 
