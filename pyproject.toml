@@ -16,6 +16,8 @@ dependencies = [
     "selenium>=4.35.0",
     "feedparser>=6.0.10",
     "pylint>=3.3.8",
+    "pytest>=8.4.1",
+    "freezegun>=1.5.5",
 ]
 
 [tool.setuptools.packages.find]

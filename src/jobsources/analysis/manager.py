@@ -7,7 +7,7 @@ import hashlib
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 
-import requests
+import requests as requests_lib
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import WebDriverException
@@ -134,7 +134,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
                 # "stop": ["```", "\n\n", "</xml>", "###", "END", "}"]
             }
             try:
-                response = requests.post(
+                response = requests_lib.post(
                     f"{self.ollama_url}/api/generate",
                     headers=headers,
                     json=data,
@@ -143,7 +143,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
                 response.raise_for_status()
                 ollama_response_json = response.json()
                 return ollama_response_json.get("response", "") # Use .get for safety
-            except requests.exceptions.RequestException as e:
+            except requests_lib.exceptions.RequestException as e:
                 self.logger.error("Error communicating with Ollama: %s", e)
                 return ""
         else: # Changed from elif
@@ -175,7 +175,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
         # If not cached or too old, download
         try:
             # Infer type from URL extension or path segment (initial guess)
-            response = requests.get(url, timeout=10)
+            response = requests_lib.get(url, timeout=10)
             response.raise_for_status()
             content = response.text
 
@@ -221,7 +221,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
             self.logger.info("Downloaded and cached content to: %s with type: %s", file_path, map_type)
             return file_path, map_type
 
-        except requests.exceptions.RequestException as e:
+        except requests_lib.exceptions.RequestException as e:
             self.logger.error("Download error (requests): %s", e)
             return "", ""
         except WebDriverException as e:
@@ -600,7 +600,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
             else:
                 self.logger.info("No postings found to extract a sample detail URL.")
 
-        except requests.exceptions.RequestException as e:
+        except requests_lib.exceptions.RequestException as e:
             self.logger.error("An error occurred during network request: %s", e)
         except IOError as e:
             self.logger.error("An error occurred during file operation: %s", e)
