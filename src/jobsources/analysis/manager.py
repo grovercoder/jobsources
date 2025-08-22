@@ -47,6 +47,16 @@ class Manager:  # pylint: disable=too-many-instance-attributes
         self.logger = logger if logger is not None else logging.getLogger(__name__)
         load_dotenv()  # Load environment variables from .env file
 
+        # Log configuration variables
+        self.logger.info("Initializing Manager with configurations:")
+        self.logger.info("  LLM_PROVIDER: %s", os.getenv("LLM_PROVIDER", "gemini").lower())
+        self.logger.info("  CACHE_DIR: %s", os.getenv("CACHE_DIR", "data/cache"))
+        self.logger.info("  REQUEST_TIMEOUT: %s", os.getenv("REQUEST_TIMEOUT", "30"))
+        if os.getenv("GEMINI_API_KEY"):
+            self.logger.info("  GEMINI_API_KEY: Loaded (value not displayed for security)")
+        else:
+            self.logger.warning("  GEMINI_API_KEY: Not found in .env file.")
+
         self.llm_provider = os.getenv("LLM_PROVIDER", "gemini").lower()
         self.model = None  # Initialize model to None
 
@@ -612,6 +622,7 @@ class Manager:  # pylint: disable=too-many-instance-attributes
     def analyze_url(self, url: str, logger=None) -> dict:
         """Analyzes the given URL and returns the mapping object."""
         self.logger = logger if logger is not None else NoOpLogger()
+        self.logger.info("Starting URL analysis for: %s", url)
         mapping_object = {
             "source_name": "",
             "selectors": {
@@ -627,18 +638,21 @@ class Manager:  # pylint: disable=too-many-instance-attributes
         }
 
         try:
+            self.logger.info("Attempting to get content for listing URL: %s", url)
             listing_file_path, map_type = self._get_url_content(url)
             if not listing_file_path:
                 self.logger.error("Failed to download listing URL.")
                 return mapping_object
+            self.logger.info("Successfully retrieved listing content from: %s (type: %s)", listing_file_path, map_type)
 
             with open(listing_file_path, "r", encoding="utf-8") as f:
                 listing_content = f.read()
 
-            # Analyze listing with Gemini to get source_name and posting selectors
+            self.logger.info("Analyzing listing content with LLM...")
             llm_listing_data = self._analyze_with_gemini(
                 listing_content, map_type, "listing", mapping_object
             )
+            self.logger.info("LLM analysis of listing content complete.")
 
             mapping_object["source_name"] = llm_listing_data.get("source_name", "")
             mapping_object["selectors"]["postings_url_selector"] = llm_listing_data.get(
@@ -647,18 +661,19 @@ class Manager:  # pylint: disable=too-many-instance-attributes
             mapping_object["selectors"]["postings_title_selector"] = (
                 llm_listing_data.get("postings_title_selector", "")
             )
+            self.logger.info("Extracted listing selectors: URL='%s', Title='%s'",
+                             mapping_object["selectors"].get("postings_url_selector"),
+                             mapping_object["selectors"].get("postings_title_selector"))
 
-            # Extract postings from the listing content
-            self.logger.debug(
-                "DEBUG: Selectors before _extract_postings: %s",
-                mapping_object["selectors"],
-            )
+
+            self.logger.info("Extracting postings from listing content...")
             mapping_object["postings"] = self._extract_postings(
                 listing_content,
                 map_type,
                 mapping_object["selectors"].get("postings_url_selector"),
                 mapping_object["selectors"].get("postings_title_selector"),
             )
+            self.logger.info("Extracted %d postings.", len(mapping_object["postings"]))
 
             # If postings are found, select a sample and analyze the detail page
             if mapping_object["postings"]:
@@ -667,6 +682,7 @@ class Manager:  # pylint: disable=too-many-instance-attributes
                 )  # Take the first posting as sample and make it absolute
                 self.logger.info("Analyzing sample detail URL: %s", sample_detail_url)
 
+                self.logger.info("Attempting to get content for sample detail URL: %s", sample_detail_url)
                 detail_file_path, detail_map_type = self._get_url_content(
                     sample_detail_url
                 )
@@ -675,17 +691,22 @@ class Manager:  # pylint: disable=too-many-instance-attributes
                         "Failed to download sample detail URL: %s", sample_detail_url
                     )
                     return mapping_object
+                self.logger.info("Successfully retrieved detail content from: %s (type: %s)", detail_file_path, detail_map_type)
+
 
                 with open(detail_file_path, "r", encoding="utf-8") as f:
                     detail_content = f.read()
 
-                # Analyze detail page with Gemini to get detail selectors
+                self.logger.info("Analyzing detail content with LLM...")
                 llm_detail_data = self._analyze_with_gemini(
                     detail_content, detail_map_type, "detail", mapping_object
                 )
+                self.logger.info("LLM analysis of detail content complete.")
+                self.logger.info("Extracted detail selectors: %s", mapping_object["selectors"])
+
                 mapping_object["selectors"].update(llm_detail_data.get("selectors", {}))
             else:
-                self.logger.info("No postings found to extract a sample detail URL.")
+                self.logger.info("No postings found to extract a sample detail URL. Skipping detail page analysis.")
 
         except requests_lib.exceptions.RequestException as e:
             self.logger.error("An error occurred during network request: %s", e)
@@ -694,6 +715,7 @@ class Manager:  # pylint: disable=too-many-instance-attributes
         except Exception as e:  # Catch any other unexpected errors during URL analysis # pylint: disable=broad-exception-caught
             self.logger.error("An unexpected error occurred during URL analysis: %s", e)
         finally:
+            self.logger.info("Finished URL analysis for: %s", url)
             # No temporary files to clean up as _get_url_content handles caching
             pass
 
