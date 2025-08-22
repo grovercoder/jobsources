@@ -82,6 +82,9 @@ class Manager: # pylint: disable=too-many-instance-attributes
         # Clean up old cache files on startup
         self._clean_old_cache_files()
 
+        # Configure request timeout
+        self.request_timeout = int(os.getenv("REQUEST_TIMEOUT", 30))
+
     def _clean_old_cache_files(self):
         """
         Deletes files in the cache directory older than 12 hours.
@@ -138,7 +141,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
                     f"{self.ollama_url}/api/generate",
                     headers=headers,
                     json=data,
-                    timeout=10
+                    timeout=self.request_timeout
                 )
                 response.raise_for_status()
                 ollama_response_json = response.json()
@@ -175,7 +178,7 @@ class Manager: # pylint: disable=too-many-instance-attributes
         # If not cached or too old, download
         try:
             # Infer type from URL extension or path segment (initial guess)
-            response = requests_lib.get(url, timeout=10)
+            response = requests_lib.get(url, timeout=self.request_timeout)
             response.raise_for_status()
             content = response.text
 
