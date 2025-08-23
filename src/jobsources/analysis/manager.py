@@ -186,7 +186,7 @@ class Manager:  # pylint: disable=too-many-instance-attributes
         file_path = ""
 
         # Check for cached file with any known extension
-        for ext in ["html", "json", "xml"]:
+        for ext in ["html", "json", "xml", "rss"]:
             potential_cached_file = f"{cached_file_base}.{ext}"
             if os.path.exists(potential_cached_file):
                 file_mod_time = datetime.fromtimestamp(
@@ -194,10 +194,14 @@ class Manager:  # pylint: disable=too-many-instance-attributes
                 )
                 if datetime.now() - file_mod_time < timedelta(hours=6):
                     self.logger.info("Using cached file: %s", potential_cached_file)
+                    # Ensure 'xml' is mapped to 'rss' for consistency with LLM analysis
+                    returned_map_type = ext
+                    if ext == "xml":
+                        returned_map_type = "rss"
                     return (
                         potential_cached_file,
-                        ext,
-                    )  # Return the actual extension as map_type
+                        returned_map_type,
+                    )
 
         # If not cached or too old, download
         try:
@@ -205,6 +209,8 @@ class Manager:  # pylint: disable=too-many-instance-attributes
             response = requests_lib.get(url, timeout=self.request_timeout)
             response.raise_for_status()
             content = response.text
+            self.logger.debug("Content-Type header from requests: %s", response.headers.get("Content-Type", ""))
+            self.logger.debug("First 500 chars of content (requests): %s", content[:500])
 
             # Determine map_type based on Content-Type header
             content_type_header = response.headers.get("Content-Type", "").lower()
@@ -226,6 +232,7 @@ class Manager:  # pylint: disable=too-many-instance-attributes
                     try:
                         self.driver.get(url)
                         content = self.driver.page_source
+                        self.logger.debug("First 500 chars of content (selenium): %s", content[:500])
                     except WebDriverException as e:
                         self.logger.warning(
                             "Selenium failed to get page source; falling back to requests content: %s",
@@ -238,17 +245,24 @@ class Manager:  # pylint: disable=too-many-instance-attributes
 
             # Fallback to content-based detection if MIME type is not specific or for initial requests content
             if map_type == "html":  # Only try to infer if it's still HTML
+                # First, try to parse as HTML to confirm it's not XML/RSS disguised as HTML
                 try:
-                    json.loads(content)
-                    map_type = "json"
-                    file_path = f"{cached_file_base}.json"
-                except json.JSONDecodeError:
+                    BeautifulSoup(content, "html.parser")
+                    # If it parses as HTML, keep map_type as html
+                except Exception: # Broad exception to catch parsing issues
+                    # If it doesn't parse well as HTML, try JSON or XML/RSS
                     try:
-                        BeautifulSoup(content, "xml")
-                        map_type = "rss"
-                        file_path = f"{cached_file_base}.xml"
-                    except (json.JSONDecodeError, Exception):
-                        pass  # Keep as HTML if neither JSON nor XML
+                        json.loads(content)
+                        map_type = "json"
+                        file_path = f"{cached_file_base}.json"
+                    except json.JSONDecodeError:
+                        try:
+                            # Use 'xml' parser for RSS/XML detection, but save as .rss
+                            BeautifulSoup(content, "xml")
+                            map_type = "rss"
+                            file_path = f"{cached_file_base}.rss"
+                        except (json.JSONDecodeError, Exception):
+                            pass  # Keep as HTML if neither JSON nor XML/RSS
 
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
@@ -621,8 +635,8 @@ class Manager:  # pylint: disable=too-many-instance-attributes
 
     def analyze_url(self, url: str, logger=None) -> dict:
         """Analyzes the given URL and returns the mapping object."""
-        self.logger = logger if logger is not None else NoOpLogger()
-        self.logger.info("Starting URL analysis for: %s", url)
+        current_logger = logger if logger is not None else self.logger
+        current_logger.info("Starting URL analysis for: %s", url)
         mapping_object = {
             "source_name": "",
             "selectors": {
@@ -638,21 +652,21 @@ class Manager:  # pylint: disable=too-many-instance-attributes
         }
 
         try:
-            self.logger.info("Attempting to get content for listing URL: %s", url)
+            current_logger.info("Attempting to get content for listing URL: %s", url)
             listing_file_path, map_type = self._get_url_content(url)
             if not listing_file_path:
-                self.logger.error("Failed to download listing URL.")
+                current_logger.error("Failed to download listing URL.")
                 return mapping_object
-            self.logger.info("Successfully retrieved listing content from: %s (type: %s)", listing_file_path, map_type)
+            current_logger.info("Successfully retrieved listing content from: %s (type: %s)", listing_file_path, map_type)
 
             with open(listing_file_path, "r", encoding="utf-8") as f:
                 listing_content = f.read()
 
-            self.logger.info("Analyzing listing content with LLM...")
+            current_logger.info("Analyzing listing content with LLM...")
             llm_listing_data = self._analyze_with_gemini(
                 listing_content, map_type, "listing", mapping_object
             )
-            self.logger.info("LLM analysis of listing content complete.")
+            current_logger.info("LLM analysis of listing content complete.")
 
             mapping_object["source_name"] = llm_listing_data.get("source_name", "")
             mapping_object["selectors"]["postings_url_selector"] = llm_listing_data.get(
@@ -661,61 +675,61 @@ class Manager:  # pylint: disable=too-many-instance-attributes
             mapping_object["selectors"]["postings_title_selector"] = (
                 llm_listing_data.get("postings_title_selector", "")
             )
-            self.logger.info("Extracted listing selectors: URL='%s', Title='%s'",
+            current_logger.info("Extracted listing selectors: URL='%s', Title='%s'",
                              mapping_object["selectors"].get("postings_url_selector"),
                              mapping_object["selectors"].get("postings_title_selector"))
 
 
-            self.logger.info("Extracting postings from listing content...")
+            current_logger.info("Extracting postings from listing content...")
             mapping_object["postings"] = self._extract_postings(
                 listing_content,
                 map_type,
                 mapping_object["selectors"].get("postings_url_selector"),
                 mapping_object["selectors"].get("postings_title_selector"),
             )
-            self.logger.info("Extracted %d postings.", len(mapping_object["postings"]))
+            current_logger.info("Extracted %d postings.", len(mapping_object["postings"]))
 
             # If postings are found, select a sample and analyze the detail page
             if mapping_object["postings"]:
                 sample_detail_url = urljoin(
                     url, mapping_object["postings"][0]["url"]
                 )  # Take the first posting as sample and make it absolute
-                self.logger.info("Analyzing sample detail URL: %s", sample_detail_url)
+                current_logger.info("Analyzing sample detail URL: %s", sample_detail_url)
 
-                self.logger.info("Attempting to get content for sample detail URL: %s", sample_detail_url)
+                current_logger.info("Attempting to get content for sample detail URL: %s", sample_detail_url)
                 detail_file_path, detail_map_type = self._get_url_content(
                     sample_detail_url
                 )
                 if not detail_file_path:
-                    self.logger.error(
+                    current_logger.error(
                         "Failed to download sample detail URL: %s", sample_detail_url
                     )
                     return mapping_object
-                self.logger.info("Successfully retrieved detail content from: %s (type: %s)", detail_file_path, detail_map_type)
+                current_logger.info("Successfully retrieved detail content from: %s (type: %s)", detail_file_path, detail_map_type)
 
 
                 with open(detail_file_path, "r", encoding="utf-8") as f:
                     detail_content = f.read()
 
-                self.logger.info("Analyzing detail content with LLM...")
+                current_logger.info("Analyzing detail content with LLM...")
                 llm_detail_data = self._analyze_with_gemini(
                     detail_content, detail_map_type, "detail", mapping_object
                 )
-                self.logger.info("LLM analysis of detail content complete.")
-                self.logger.info("Extracted detail selectors: %s", mapping_object["selectors"])
+                current_logger.info("LLM analysis of detail content complete.")
+                current_logger.info("Extracted detail selectors: %s", mapping_object["selectors"])
 
                 mapping_object["selectors"].update(llm_detail_data.get("selectors", {}))
             else:
-                self.logger.info("No postings found to extract a sample detail URL. Skipping detail page analysis.")
+                current_logger.info("No postings found to extract a sample detail URL. Skipping detail page analysis.")
 
         except requests_lib.exceptions.RequestException as e:
-            self.logger.error("An error occurred during network request: %s", e)
+            current_logger.error("An error occurred during network request: %s", e)
         except IOError as e:
-            self.logger.error("An error occurred during file operation: %s", e)
+            current_logger.error("An error occurred during file operation: %s", e)
         except Exception as e:  # Catch any other unexpected errors during URL analysis # pylint: disable=broad-exception-caught
-            self.logger.error("An unexpected error occurred during URL analysis: %s", e)
+            current_logger.error("An unexpected error occurred during URL analysis: %s", e)
         finally:
-            self.logger.info("Finished URL analysis for: %s", url)
+            current_logger.info("Finished URL analysis for: %s", url)
             # No temporary files to clean up as _get_url_content handles caching
             pass
 
